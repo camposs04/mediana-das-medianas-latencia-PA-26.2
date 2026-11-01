@@ -2,6 +2,8 @@
 
 from typing import Callable
 
+import trace
+
 Selecionar = Callable[[list[int], int, int], int]  # (lista, k, profundidade) -> valor
 
 
@@ -29,8 +31,17 @@ def mediana_do_grupo(grupo: list[int]) -> int:
 
 def mediana_das_medianas(lista: list[int], selecionar: Selecionar,
                          profundidade: int = 0) -> int:
-    """Devolve o pivô de `lista`.
-
-    Stub: devolve o elemento central da lista ordenada, sem usar `selecionar`.
+    """Devolve o pivô de `lista`, a mediana das medianas.
     """
-    return sorted(lista)[len(lista) // 2]
+    if not lista:
+        raise ValueError("lista não pode ser vazia")
+
+    grupos = dividir_em_grupos(lista)
+    trace.log(profundidade, f"grupos: {len(grupos)}, tamanhos {[len(g) for g in grupos]}")
+
+    medianas = [mediana_do_grupo(g) for g in grupos]
+    trace.log(profundidade, f"medianas: {medianas}")
+
+    pivo = selecionar(medianas, (len(medianas) - 1) // 2, profundidade + 1)
+    trace.log(profundidade, f"pivô: {pivo}")
+    return pivo
