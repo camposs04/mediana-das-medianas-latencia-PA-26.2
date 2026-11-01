@@ -26,8 +26,35 @@ def particionar(lista: list[int], pivo: int,
 
 
 def selecionar(lista: list[int], k: int, profundidade: int = 0) -> int:
-    """Devolve o k-ésimo menor elemento de `lista`, 0-indexado.
+    """Devolve o k-ésimo menor elemento de `lista`, 0-indexado, em O(n).
 
-    Stub: ordena a lista inteira, sem usar `mediana_das_medianas`.
+    A recursão segue um só lado da partição. O pivô da mediana das medianas
+    deixa no máximo cerca de 7n/10 elementos nesse lado, o que dá a recorrência
+    T(n) <= T(n/5) + T(7n/10) + O(n).
     """
-    return sorted(lista)[k]
+    n = len(lista)
+    if n == 0:
+        raise ValueError("lista não pode ser vazia")
+    if not 0 <= k < n:
+        raise ValueError(f"k deve estar em [0, {n - 1}], recebido {k}")
+
+    trace.log(profundidade, f"selecionar: k={k}, n={n}")
+
+    if n <= 5:
+        # Custo O(1), porque n é limitado por uma constante.
+        resultado = sorted(lista)[k]
+        trace.log(profundidade, f"caso base: {resultado}")
+        return resultado
+
+    pivo = mediana_das_medianas(lista, selecionar, profundidade)
+    menores, iguais, maiores = particionar(lista, pivo, profundidade)
+    m, i = len(menores), len(iguais)
+
+    if k < m:
+        trace.log(profundidade, "lado: menores")
+        return selecionar(menores, k, profundidade + 1)
+    if k < m + i:
+        trace.log(profundidade, f"lado: iguais, resultado {pivo}")
+        return pivo
+    trace.log(profundidade, "lado: maiores")
+    return selecionar(maiores, k - m - i, profundidade + 1)
