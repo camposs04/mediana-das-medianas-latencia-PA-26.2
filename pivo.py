@@ -11,16 +11,25 @@ def dividir_em_grupos(lista: list[int], tamanho: int = 5) -> list[list[int]]:
 
 
 def mediana_do_grupo(grupo: list[int]) -> int:
-    """Devolve o índice (len-1)//2 da versão ordenada de `grupo`."""
-    return sorted(grupo)[(len(grupo) - 1) // 2]
+    """Devolve o valor de índice (len-1)//2 da versão ordenada de `grupo`.
+
+    Em grupo par, esse valor é a mediana inferior.
+    """
+    # Custo O(1) por grupo, porque o tamanho do grupo é constante.
+    ordenado = grupo.copy()
+    for i in range(1, len(ordenado)):
+        atual = ordenado[i]
+        j = i - 1
+        while j >= 0 and ordenado[j] > atual:
+            ordenado[j + 1] = ordenado[j]
+            j -= 1
+        ordenado[j + 1] = atual
+    return ordenado[(len(ordenado) - 1) // 2]
 
 
 def mediana_das_medianas(lista: list[int], selecionar: Selecionar,
                          profundidade: int = 0) -> int:
     """Devolve o pivô de `lista`.
-
-    Pivô = selecionar(medianas, (len(medianas)-1)//2, profundidade+1).
-    Não importa selecao.py: a função de seleção chega por parâmetro.
 
     Stub: devolve o elemento central da lista ordenada, sem usar `selecionar`.
     """
