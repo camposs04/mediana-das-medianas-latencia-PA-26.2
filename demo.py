@@ -27,6 +27,7 @@ except ImportError:  # O Python do Windows não traz o curses.
 MAX_N = 60
 ARQUIVO_PADRAO = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "exemplos", "latencias.txt")
+PERCENTIL_PADRAO = 90.0
 INTERVALO_PADRAO = 3.0
 DURACAO_MOVIMENTO = 0.45
 ESPERA_TECLA_MS = 33
@@ -35,6 +36,8 @@ MARGEM = 2
 TOPO_PALCO = 5  # Título, linha vazia, duas de legenda e outra vazia.
 LINHAS_FIXAS = TOPO_PALCO + 2  # Mais a linha vazia e o rodapé.
 LARGURA_ROTULO = 13
+TECLAS_ENTER = ("\n", "\r")
+TECLA_ESC = "\x1b"
 NOMES_FAIXAS = ("menores", "iguais", "maiores")
 
 
@@ -316,6 +319,25 @@ def interpolar(origem: tuple[int, int], destino: tuple[int, int],
             round(origem[1] + (destino[1] - origem[1]) * suave))
 
 
+def escrever(tela, y: int, x: int, texto: str, atributo: int = 0) -> None:
+    """Escreve o que couber na tela, sem quebrar nas bordas."""
+    altura, largura = tela.getmaxyx()
+    if not (0 <= y < altura and 0 <= x < largura):
+        return
+    try:
+        tela.addnstr(y, x, texto, largura - x, atributo)
+    except curses.error:  # Escrever na última célula da tela sempre falha.
+        pass
+
+
+def definir_cursor(visivel: bool) -> None:
+    """Mostra ou esconde o cursor, nos terminais que permitem."""
+    try:
+        curses.curs_set(1 if visivel else 0)
+    except curses.error:
+        pass
+
+
 def criar_estilos() -> dict[str, int]:
     """Monta os atributos de cada marca, conforme as cores do terminal."""
     apagada = curses.A_DIM
@@ -393,13 +415,7 @@ class Tela:
             self.ir_para(0 if no_fim else self.indice + 1, agora)
 
     def escrever(self, y: int, x: int, texto: str, atributo: int = 0) -> None:
-        altura, largura = self.tela.getmaxyx()
-        if not (0 <= y < altura and 0 <= x < largura):
-            return
-        try:
-            self.tela.addnstr(y, x, texto, largura - x, atributo)
-        except curses.error:  # Escrever na última célula da tela sempre falha.
-            pass
+        escrever(self.tela, y, x, texto, atributo)
 
     def desenhar(self, agora: float) -> None:
         self.tela.erase()
@@ -427,11 +443,13 @@ class Tela:
             self.escrever(TOPO_PALCO + y, x, texto, estilo)
 
         acao = "pausa" if self.tocando else "reproduz"
-        rodape = f"espaço {acao}   ←/→ passo   r início   q sai"
+        rodape = f"espaço {acao}   ←/→ passo   r início   n nova lista   q sai"
         self.escrever(altura - 1, MARGEM, rodape, curses.A_DIM)
         self.tela.refresh()
 
-    def rodar(self) -> None:
+    def rodar(self) -> bool:
+        """Roda até o usuário sair. Devolve True se ele pediu outra entrada."""
+        definir_cursor(False)
         self.tela.timeout(ESPERA_TECLA_MS)
         while True:
             agora = time.monotonic()
@@ -444,7 +462,9 @@ class Tela:
             tecla = self.tela.getch()
             agora = time.monotonic()
             if tecla in (ord("q"), ord("Q")):
-                return
+                return False
+            if tecla in (ord("n"), ord("N")):
+                return True
             if tecla == ord(" "):
                 self.alternar_reproducao(agora)
             elif tecla == curses.KEY_RIGHT:
@@ -468,10 +488,178 @@ class Tela:
                     self.ir_para(self.indice + 1, agora)
 
 
+def conferir_tamanho(valores: list[int]) -> None:
+    """Recusa listas maiores do que a animação comporta."""
+    if len(valores) > MAX_N:
+        raise ValueError(f"a animação cabe na tela com até {MAX_N} valores, "
+                         f"recebidos {len(valores)}")
+
+
+def ler_lista(texto: str) -> list[int]:
+    """Converte números separados por espaço em uma lista de inteiros."""
+    valores = []
+    for parte in texto.split():
+        try:
+            valores.append(int(parte))
+        except ValueError:
+            raise ValueError(f"{parte!r} não é um número inteiro") from None
+    return valores
+
+
+def ler_indice(texto: str, n: int) -> int:
+    """Converte o índice digitado. Vazio escolhe a mediana da lista."""
+    if not texto.strip():
+        return (n - 1) // 2
+    try:
+        indice = int(texto)
+    except ValueError:
+        raise ValueError(f"{texto.strip()!r} não é um número inteiro") from None
+    if not 0 <= indice < n:
+        raise ValueError(f"o índice deve estar entre 0 e {n - 1}")
+    return indice
+
+
+def cabe_na_tela(quadros: list[Quadro], valores: list[int], tela) -> bool:
+    """Diz se todos os quadros cabem no tamanho atual do terminal."""
+    altura, largura = tela.getmaxyx()
+    peca = largura_peca(valores)
+    return all(dispor(quadro, largura, altura - LINHAS_FIXAS, peca) is not None
+               for quadro in quadros)
+
+
+class Campo:
+    """Uma linha de texto editável, sem depender de como é desenhada."""
+
+    def __init__(self) -> None:
+        self.texto = ""
+        self.cursor = 0
+
+    def limpar(self) -> None:
+        self.texto = ""
+        self.cursor = 0
+
+    def tecla(self, tecla: str | int) -> None:
+        """Aplica uma tecla, no formato devolvido por `get_wch`."""
+        if tecla in (curses.KEY_BACKSPACE, "\x7f", "\b"):
+            if self.cursor:
+                self.texto = self.texto[:self.cursor - 1] + self.texto[self.cursor:]
+                self.cursor -= 1
+        elif tecla == curses.KEY_DC:
+            self.texto = self.texto[:self.cursor] + self.texto[self.cursor + 1:]
+        elif tecla == curses.KEY_LEFT:
+            self.cursor = max(0, self.cursor - 1)
+        elif tecla == curses.KEY_RIGHT:
+            self.cursor = min(len(self.texto), self.cursor + 1)
+        elif tecla == curses.KEY_HOME:
+            self.cursor = 0
+        elif tecla == curses.KEY_END:
+            self.cursor = len(self.texto)
+        elif isinstance(tecla, str) and tecla.isprintable():
+            self.texto = self.texto[:self.cursor] + tecla + self.texto[self.cursor:]
+            self.cursor += 1
+
+
+class Animacao(NamedTuple):
+    """Uma entrada pronta para ser reproduzida."""
+
+    valores: list[int]
+    quadros: list[Quadro]
+
+
+class Formulario:
+    """Pede a lista e o índice, um campo de cada vez."""
+
+    def __init__(self, tela, exemplo: list[int]) -> None:
+        self.tela = tela
+        self.exemplo = exemplo
+        self.lista = Campo()
+        self.indice = Campo()
+
+    def desenhar(self, campo: Campo, pergunta: str, dica: str, erro: str) -> None:
+        self.tela.erase()
+        altura, largura = self.tela.getmaxyx()
+        escrever(self.tela, 0, MARGEM, "Mediana das Medianas", curses.A_BOLD)
+        escrever(self.tela, 2, MARGEM, pergunta)
+        escrever(self.tela, 5, MARGEM, dica, curses.A_DIM)
+        escrever(self.tela, 7, MARGEM, erro, curses.A_BOLD)
+        escrever(self.tela, altura - 1, MARGEM, "Enter confirma   Esc volta",
+                 curses.A_DIM)
+
+        # Texto maior que a linha rola junto com o cursor.
+        visivel = max(1, largura - 2 * MARGEM - 2)
+        inicio = max(0, campo.cursor - visivel + 1)
+        escrever(self.tela, 3, MARGEM, "> " + campo.texto[inicio:inicio + visivel])
+        self.tela.move(min(3, altura - 1),
+                       min(MARGEM + 2 + campo.cursor - inicio, largura - 1))
+        self.tela.refresh()
+
+    def ler_campo(self, campo: Campo, pergunta: str, dica: str, validar):
+        """Edita `campo` até ser válido. Devolve None se o usuário desistir."""
+        erro = ""
+        while True:
+            self.desenhar(campo, pergunta, dica, erro)
+            tecla = self.tela.get_wch()
+            if tecla in TECLAS_ENTER or tecla == curses.KEY_ENTER:
+                try:
+                    return validar(campo.texto)
+                except ValueError as falha:
+                    erro = str(falha)
+            elif tecla == TECLA_ESC:
+                return None
+            elif tecla != curses.KEY_RESIZE:
+                campo.tecla(tecla)
+                erro = ""
+
+    def validar_lista(self, texto: str) -> list[int]:
+        valores = ler_lista(texto) or self.exemplo
+        conferir_tamanho(valores)
+        # Os maiores quadros são os da lista inteira, iguais para qualquer k.
+        quadros = gerar_quadros(valores, (len(valores) - 1) // 2, "")
+        if not cabe_na_tela(quadros, valores, self.tela):
+            raise ValueError("esses números não cabem nesta tela: "
+                             "use menos números ou aumente o terminal")
+        return valores
+
+    def pedir(self) -> Animacao | None:
+        """Devolve a animação pedida, ou None se o usuário cancelar."""
+        definir_cursor(True)
+        self.tela.timeout(-1)
+        self.indice.limpar()
+        while True:
+            valores = self.ler_campo(self.lista, "Números separados por espaço:",
+                                     "Enter vazio usa o exemplo.", self.validar_lista)
+            if valores is None:
+                return None
+
+            n = len(valores)
+            k = self.ler_campo(self.indice, f"Índice de 0 a {n - 1}:",
+                               f"Enter vazio usa a mediana, índice {(n - 1) // 2}.",
+                               lambda texto: ler_indice(texto, n))
+            if k is not None:
+                return Animacao(valores, gerar_quadros(valores, k, f"índice {k}"))
+
+
+def conduzir(tela, animacao: Animacao | None, exemplo: list[int],
+             intervalo: float) -> None:
+    """Alterna entre o formulário e a animação até o usuário sair."""
+    formulario = Formulario(tela, exemplo)
+    pedir = animacao is None
+    while True:
+        if pedir:
+            nova = formulario.pedir()
+            if nova is None and animacao is None:
+                return
+            animacao = nova or animacao
+        pedir = Tela(tela, animacao.quadros, animacao.valores, intervalo).rodar()
+        if not pedir:
+            return
+
+
 def criar_parser() -> argparse.ArgumentParser:
     """Monta o parser dos argumentos da animação."""
     parser = argparse.ArgumentParser(
-        description="Anima a Mediana das Medianas no terminal, um passo por vez."
+        description="Anima a Mediana das Medianas no terminal, um passo por vez. "
+                    "Sem opções de entrada, pede a lista e o índice na tela."
     )
     fonte = parser.add_mutually_exclusive_group()
     fonte.add_argument("--arquivo",
@@ -481,8 +669,9 @@ def criar_parser() -> argparse.ArgumentParser:
                        help=f"quantidade de latências geradas, até {MAX_N}")
     parser.add_argument("--seed", type=cli.inteiro, help="semente da geração")
     consulta = parser.add_mutually_exclusive_group()
-    consulta.add_argument("--percentil", type=cli.numero, default=90.0,
-                          help="percentil em (0, 100] (padrão: 90)")
+    consulta.add_argument("--percentil", type=cli.numero,
+                          help="percentil em (0, 100] "
+                               f"(padrão: {PERCENTIL_PADRAO:g})")
     consulta.add_argument("--k", type=cli.inteiro,
                           help="pede o k-ésimo menor, com k a partir de 1")
     parser.add_argument("--intervalo", type=cli.numero, default=INTERVALO_PADRAO,
@@ -497,31 +686,35 @@ def main() -> None:
     args = parser.parse_args()
     if not args.intervalo > 0:
         parser.error("--intervalo deve ser maior que zero")
+    pedir_entrada = all(opcao is None for opcao in
+                        (args.arquivo, args.n, args.k, args.percentil))
     if args.arquivo is None and args.n is None:
         args.arquivo = ARQUIVO_PADRAO
+    if args.percentil is None:
+        args.percentil = PERCENTIL_PADRAO
     args.percentis = None if args.k is not None else [args.percentil]
 
     valores, consultas = cli.preparar(parser, args)
-    if len(valores) > MAX_N:
-        parser.error(f"a animação cabe na tela com até {MAX_N} valores, "
-                     f"recebidos {len(valores)}")
+    try:
+        conferir_tamanho(valores)
+    except ValueError as erro:
+        parser.error(str(erro))
     if curses is None:
         parser.error("o curses não está disponível neste Python "
                      "(no Windows: pip install windows-curses)")
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         parser.error("a animação precisa rodar em um terminal interativo")
 
-    rotulo, k = consultas[0]
-    quadros = gerar_quadros(valores, k, rotulo)
+    animacao = None
+    if not pedir_entrada:
+        rotulo, k = consultas[0]
+        animacao = Animacao(valores, gerar_quadros(valores, k, rotulo))
 
     def abrir(tela) -> None:
-        try:
-            curses.curs_set(0)
-        except curses.error:  # Alguns terminais não escondem o cursor.
-            pass
         curses.use_default_colors()
-        Tela(tela, quadros, valores, args.intervalo).rodar()
+        conduzir(tela, animacao, valores, args.intervalo)
 
+    os.environ.setdefault("ESCDELAY", "25")  # Esc responde sem a espera padrão.
     try:
         locale.setlocale(locale.LC_ALL, "")
     except locale.Error:

@@ -46,22 +46,31 @@ Listas com até 30 elementos são impressas. Acima disso, só o tamanho aparece.
 python demo.py
 ```
 
-Mostra o p90 de `exemplos/latencias.txt`, uma etapa por vez. Usa o `curses` da biblioteca padrão e chama o `selecionar` de verdade, então o que aparece na tela é o que o código fez. Precisa de um terminal com pelo menos 80 colunas por 24 linhas para as listas maiores. No Windows, instale antes o pacote `windows-curses`, porque o Python de lá não traz o `curses`.
+A tela pede os números separados por espaço e depois o índice, e mostra a seleção uma etapa por vez. O índice começa em 0: `0` é o menor valor e `n-1` é o maior. Enter vazio usa `exemplos/latencias.txt` na lista e a mediana no índice. São aceitos até 60 inteiros, inclusive negativos e repetidos.
+
+Usa o `curses` da biblioteca padrão e chama o `selecionar` de verdade, então o que aparece na tela é o que o código fez. Precisa de um terminal com pelo menos 80 colunas por 24 linhas para as listas maiores. No Windows, instale antes o pacote `windows-curses`, porque o Python de lá não traz o `curses`.
 
 | Tecla | Efeito |
 | --- | --- |
 | Espaço | Reproduz ou pausa |
 | Seta direita e seta esquerda | Avança ou volta uma etapa |
 | `r` | Volta ao início |
+| `n` | Digita outra lista e outro índice |
 | `q` | Sai |
+
+Passar uma entrada na linha de comando pula as perguntas e abre a animação direto:
+
+```bash
+python demo.py --arquivo exemplos/latencias.txt --percentil 90
+```
 
 | Opção | Efeito |
 | --- | --- |
-| `--arquivo CAMINHO` | Lê uma latência por linha (padrão: `exemplos/latencias.txt`). |
+| `--arquivo CAMINHO` | Lê uma latência por linha. |
 | `--n N` | Gera `N` latências, até 60. Não combina com `--arquivo`. |
 | `--seed S` | Fixa a semente da geração. |
 | `--percentil P` | Percentil em (0, 100] (padrão: 90). Não combina com `--k`. |
-| `--k K` | Pede o k-ésimo menor, de 1 a n. |
+| `--k K` | Pede o k-ésimo menor, de 1 a n. Aqui a contagem começa em 1, como no `main.py`. |
 | `--intervalo S` | Segundos em cada etapa ao reproduzir (padrão: 3). |
 
 ## Testes

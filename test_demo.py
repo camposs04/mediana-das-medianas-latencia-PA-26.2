@@ -19,6 +19,8 @@ import selecao
 import trace
 
 RAIZ = os.path.dirname(os.path.abspath(__file__))
+ARQUIVO = os.path.join("exemplos", "latencias.txt")
+ESC = "\x1b"
 EXEMPLO = [47, 82, 35, 118, 64, 412, 29, 91, 56, 73, 105, 38, 67, 22, 850, 99,
            44, 78, 113, 31, 58, 86, 327, 52, 70]
 LISTAS = {
@@ -230,6 +232,168 @@ class TestInterpolar(unittest.TestCase):
         self.assertGreater(demo.interpolar((0, 0), (100, 0), 0.5)[0], 50)
 
 
+class TestLerLista(unittest.TestCase):
+    def test_numeros_separados_por_espaco(self):
+        self.assertEqual(demo.ler_lista("5 3 9"), [5, 3, 9])
+
+    def test_espacos_a_mais_nao_importam(self):
+        self.assertEqual(demo.ler_lista("  5   3 "), [5, 3])
+
+    def test_aceita_negativos(self):
+        self.assertEqual(demo.ler_lista("-4 0 7"), [-4, 0, 7])
+
+    def test_vazio_vira_lista_vazia(self):
+        self.assertEqual(demo.ler_lista("   "), [])
+
+    def test_erro_aponta_o_trecho_invalido(self):
+        with self.assertRaisesRegex(ValueError, "1.5"):
+            demo.ler_lista("3 1.5 2")
+
+
+class TestLerIndice(unittest.TestCase):
+    def test_extremos_valem(self):
+        self.assertEqual(demo.ler_indice("0", 7), 0)
+        self.assertEqual(demo.ler_indice("6", 7), 6)
+
+    def test_vazio_usa_a_mediana(self):
+        self.assertEqual(demo.ler_indice("  ", 7), 3)
+        self.assertEqual(demo.ler_indice("", 6), 2)
+
+    def test_fora_da_lista(self):
+        for texto in ("7", "-1"):
+            with self.assertRaisesRegex(ValueError, "entre 0 e 6"):
+                demo.ler_indice(texto, 7)
+
+    def test_texto_invalido(self):
+        with self.assertRaisesRegex(ValueError, "abc"):
+            demo.ler_indice("abc", 7)
+
+
+@unittest.skipIf(demo.curses is None, "Python sem curses")
+class TestCampo(unittest.TestCase):
+    def digitar(self, *teclas):
+        campo = demo.Campo()
+        for tecla in teclas:
+            campo.tecla(tecla)
+        return campo
+
+    def test_digita_em_ordem(self):
+        self.assertEqual(self.digitar("1", "2", " ", "3").texto, "12 3")
+
+    def test_backspace_apaga_antes_do_cursor(self):
+        campo = self.digitar("1", "2", "3", demo.curses.KEY_LEFT,
+                             demo.curses.KEY_BACKSPACE)
+        self.assertEqual((campo.texto, campo.cursor), ("13", 1))
+
+    def test_backspace_do_terminal_apaga(self):
+        self.assertEqual(self.digitar("1", "2", "\x7f").texto, "1")
+        self.assertEqual(self.digitar("1", "2", "\b").texto, "1")
+
+    def test_backspace_no_inicio_nao_faz_nada(self):
+        campo = self.digitar("1", demo.curses.KEY_HOME, demo.curses.KEY_BACKSPACE)
+        self.assertEqual((campo.texto, campo.cursor), ("1", 0))
+
+    def test_delete_apaga_sob_o_cursor(self):
+        campo = self.digitar("1", "2", demo.curses.KEY_HOME, demo.curses.KEY_DC)
+        self.assertEqual((campo.texto, campo.cursor), ("2", 0))
+
+    def test_insere_no_meio(self):
+        campo = self.digitar("1", "3", demo.curses.KEY_LEFT, "2")
+        self.assertEqual((campo.texto, campo.cursor), ("123", 2))
+
+    def test_setas_param_nas_pontas(self):
+        campo = self.digitar("1", demo.curses.KEY_RIGHT, demo.curses.KEY_RIGHT)
+        self.assertEqual(campo.cursor, 1)
+        campo = self.digitar("1", demo.curses.KEY_LEFT, demo.curses.KEY_LEFT)
+        self.assertEqual(campo.cursor, 0)
+
+    def test_end_vai_ao_fim(self):
+        campo = self.digitar("1", "2", demo.curses.KEY_HOME, demo.curses.KEY_END)
+        self.assertEqual(campo.cursor, 2)
+
+    def test_ignora_teclas_sem_texto(self):
+        campo = self.digitar("1", demo.curses.KEY_F1, "\x01", "\t")
+        self.assertEqual(campo.texto, "1")
+
+
+@unittest.skipIf(demo.curses is None, "Python sem curses")
+class TestFormulario(unittest.TestCase):
+    def pedir(self, teclas, exemplo=(4, 8, 6)):
+        janela = JanelaFalsa(teclas, passo=0)
+        formulario = demo.Formulario(janela, list(exemplo))
+        return formulario.pedir(), janela, formulario
+
+    def test_lista_e_indice_digitados(self):
+        animacao, *_ = self.pedir([*"5 3 9 1", "\n", "2", "\n"])
+        self.assertEqual(animacao.valores, [5, 3, 9, 1])
+        self.assertIn("índice 2 = 5 ms", animacao.quadros[-1].legenda)
+
+    def test_indice_zero_e_valido(self):
+        animacao, *_ = self.pedir([*"5 3 9", "\n", "0", "\n"])
+        self.assertIn("índice 0 = 3 ms", animacao.quadros[-1].legenda)
+
+    def test_enter_vazio_usa_exemplo_e_mediana(self):
+        animacao, *_ = self.pedir(["\n", "\n"])
+        self.assertEqual(animacao.valores, [4, 8, 6])
+        self.assertIn("= 6 ms", animacao.quadros[-1].legenda)
+
+    def test_pede_o_intervalo_real_do_indice(self):
+        _, janela, _ = self.pedir([*"5 3 9 1", "\n", "0", "\n"])
+        self.assertTrue(any("0 a 3" in texto for texto in janela.historico))
+
+    def test_lista_invalida_mostra_erro_e_deixa_corrigir(self):
+        animacao, janela, _ = self.pedir(
+            [*"5 x", "\n", "\x7f", "7", "\n", "1", "\n"])
+        self.assertTrue(any("'x'" in texto for texto in janela.historico))
+        self.assertEqual(animacao.valores, [5, 7])
+
+    def test_indice_fora_da_lista_mostra_erro_e_deixa_corrigir(self):
+        animacao, janela, _ = self.pedir([*"5 3", "\n", "9", "\n", "\x7f", "1", "\n"])
+        self.assertTrue(any("entre 0 e 1" in texto for texto in janela.historico))
+        self.assertIn("índice 1 = 5 ms", animacao.quadros[-1].legenda)
+
+    def test_lista_grande_demais(self):
+        grande = " ".join(["1"] * (demo.MAX_N + 1))
+        animacao, janela, _ = self.pedir([*grande, "\n", ESC])
+        self.assertIsNone(animacao)
+        self.assertTrue(any(str(demo.MAX_N) in texto for texto in janela.historico))
+
+    def test_valores_que_nao_cabem_na_tela(self):
+        longos = " ".join(["12345678"] * demo.MAX_N)
+        animacao, janela, _ = self.pedir([*longos, "\n", ESC])
+        self.assertIsNone(animacao)
+        self.assertTrue(any("cabem" in texto for texto in janela.historico))
+
+    def test_esc_na_lista_cancela(self):
+        animacao, *_ = self.pedir([ESC])
+        self.assertIsNone(animacao)
+
+    def test_esc_no_indice_volta_para_a_lista_com_o_texto(self):
+        animacao, _, formulario = self.pedir([*"5 3", "\n", ESC, ESC])
+        self.assertIsNone(animacao)
+        self.assertEqual(formulario.lista.texto, "5 3")
+
+    def test_redimensionar_nao_digita_nada(self):
+        animacao, *_ = self.pedir([demo.curses.KEY_RESIZE, *"5", "\n", "\n"])
+        self.assertEqual(animacao.valores, [5])
+
+    def test_redimensionar_mantem_a_mensagem_de_erro(self):
+        _, janela, _ = self.pedir(["x", "\n", demo.curses.KEY_RESIZE, ESC])
+        erros = [texto for texto in janela.historico if "'x'" in texto]
+        self.assertEqual(len(erros), 2)
+
+    def test_texto_longo_rola_ate_o_cursor(self):
+        _, janela, _ = self.pedir([*("1 " * 50), *"777", ESC])
+        self.assertTrue(any(texto.endswith("777") for texto in janela.historico))
+
+    def test_segundo_pedido_comeca_com_o_indice_vazio(self):
+        janela = JanelaFalsa([*"5 3 9", "\n", "0", "\n", "\n", "\n"], passo=0)
+        formulario = demo.Formulario(janela, [1])
+        formulario.pedir()
+        animacao = formulario.pedir()
+        self.assertIn("= 5 ms", animacao.quadros[-1].legenda)
+
+
 class JanelaFalsa:
     """Janela do curses em memória, com um relógio que anda a cada tecla lida."""
 
@@ -238,6 +402,7 @@ class JanelaFalsa:
         self.passo = passo
         self.agora = 0.0
         self.escritas = []
+        self.historico = []
 
     def getmaxyx(self):
         return 24, 80
@@ -247,6 +412,7 @@ class JanelaFalsa:
 
     def addnstr(self, y, x, texto, _limite, _atributo=0):
         self.escritas.append((y, x, texto))
+        self.historico.append(texto)
 
     def refresh(self):
         pass
@@ -258,6 +424,12 @@ class JanelaFalsa:
         self.agora += self.passo
         return self.teclas.pop(0)
 
+    def get_wch(self):
+        return self.teclas.pop(0)
+
+    def move(self, _y, _x):
+        pass
+
 
 @unittest.skipIf(demo.curses is None, "Python sem curses")
 class TestLaco(unittest.TestCase):
@@ -267,7 +439,7 @@ class TestLaco(unittest.TestCase):
         with patch.object(demo, "criar_estilos", lambda: collections.defaultdict(int)), \
                 patch.object(demo.time, "monotonic", lambda: janela.agora):
             tela = demo.Tela(janela, quadros, EXEMPLO, 3.0)
-            tela.rodar()
+            self.nova_entrada = tela.rodar()
         return janela, tela
 
     def test_movimento_termina_com_as_pecas_no_destino(self):
@@ -279,6 +451,14 @@ class TestLaco(unittest.TestCase):
                     for x, y in tela.cena.pos.values()}
         desenhadas = {(y, x) for y, x, _ in janela.escritas}
         self.assertLessEqual(destinos, desenhadas)
+
+    def test_n_pede_nova_entrada(self):
+        self.rodar([ord("n")], passo=0.01)
+        self.assertTrue(self.nova_entrada)
+
+    def test_q_encerra(self):
+        self.rodar([ord("q")], passo=0.01)
+        self.assertFalse(self.nova_entrada)
 
     def test_seta_esquerda_volta_um_quadro(self):
         direita, esquerda = demo.curses.KEY_RIGHT, demo.curses.KEY_LEFT
@@ -386,31 +566,63 @@ class TestNoTerminal(unittest.TestCase):
         os.close(mestre)
         return proc.returncode, saida.decode(errors="replace"), erros
 
-    def test_abre_e_sai_com_q(self):
-        codigo, saida, erros = self.sessao([(0.5, b"q")])
+    def test_com_arquivo_abre_direto_e_sai_com_q(self):
+        codigo, saida, erros = self.sessao([(0.5, b"q")], args=("--arquivo", ARQUIVO))
         self.assertEqual((codigo, erros), (0, ""))
         self.assertIn("Queremos", saida)
 
+    def test_com_percentil_abre_direto(self):
+        codigo, saida, erros = self.sessao([(0.5, b"q")], args=("--percentil", "50"))
+        self.assertEqual((codigo, erros), (0, ""))
+        self.assertIn("Queremos", saida)
+
+    def test_sem_argumentos_pede_a_lista(self):
+        codigo, saida, erros = self.sessao([(0.5, b"\x1b")])
+        self.assertEqual((codigo, erros), (0, ""))
+        self.assertIn("Números", saida)
+
+    def test_lista_e_indice_digitados_ate_o_fim(self):
+        passos = [(0.5, b"5 3 9 1 7 2 8\n"), (0.2, b"3\n")]
+        passos += [(0.15, b"\x1bOC")] * 12 + [(0.4, b"q")]
+        codigo, saida, erros = self.sessao(passos)
+        self.assertEqual((codigo, erros), (0, ""))
+        self.assertIn("índice 3 = 5 ms", saida)
+
+    def test_n_troca_a_entrada_sem_sair(self):
+        passos = [(0.5, b"n"), (0.3, b"7 6 5\n"), (0.2, b"0\n"),
+                  (0.3, b"\x1bOC"), (0.3, b"\x1bOC"), (0.5, b"q")]
+        codigo, saida, erros = self.sessao(passos, args=("--arquivo", ARQUIVO))
+        self.assertEqual((codigo, erros), (0, ""))
+        self.assertIn("índice 0 = 5 ms", saida)
+
+    def test_esc_depois_de_n_volta_para_a_animacao(self):
+        passos = [(0.5, b"n"), (0.3, b"\x1b"), (0.3, b"\x1bOC"), (0.5, b"q")]
+        codigo, saida, erros = self.sessao(passos, args=("--arquivo", ARQUIVO))
+        self.assertEqual((codigo, erros), (0, ""))
+        self.assertIn("Dividimos", saida)
+
     def test_seta_avanca_um_quadro(self):
         codigo, saida, erros = self.sessao(
-            [(0.5, b"\x1bOC"), (0.8, b"q")])
+            [(0.5, b"\x1bOC"), (0.8, b"q")], args=("--arquivo", ARQUIVO))
         self.assertEqual((codigo, erros), (0, ""))
         self.assertIn("Dividimos", saida)
 
     def test_reproducao_avanca_sozinha(self):
         codigo, saida, erros = self.sessao(
-            [(0.4, b" "), (1.2, b"q")], args=("--intervalo", "0.1"))
+            [(0.4, b" "), (1.2, b"q")],
+            args=("--arquivo", ARQUIVO, "--intervalo", "0.1"))
         self.assertEqual((codigo, erros), (0, ""))
         self.assertIn("Ordenamos", saida)
 
     def test_chega_ao_fim_sem_erro(self):
         passos = [(0.15, b"\x1bOC")] * 20 + [(0.4, b"q")]
-        codigo, saida, erros = self.sessao(passos)
+        codigo, saida, erros = self.sessao(passos, args=("--arquivo", ARQUIVO))
         self.assertEqual((codigo, erros), (0, ""))
         self.assertIn("327 ms", saida)
 
     def test_terminal_pequeno_avisa_sem_quebrar(self):
-        codigo, saida, erros = self.sessao([(0.5, b"q")], colunas=20, linhas=6)
+        codigo, saida, erros = self.sessao([(0.5, b"q")], colunas=20, linhas=6,
+                                           args=("--arquivo", ARQUIVO))
         self.assertEqual((codigo, erros), (0, ""))
         self.assertIn("umente", saida)
 
