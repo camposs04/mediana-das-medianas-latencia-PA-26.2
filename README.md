@@ -2,6 +2,9 @@
 
 Calcula percentis de latência (p50, p90, p99) sem ordenar a lista. Um percentil é o k-ésimo menor valor, então basta um algoritmo de seleção. Este projeto usa a Mediana das Medianas (BFPRT), que roda em O(n) mesmo no pior caso.
 
+## Vídeo da Apresentação
+https://github.com/camposs04/mediana-das-medianas-latencia-PA-26.2
+
 ## Como rodar
 
 Requer Python 3.10+ e não tem dependências externas.
